@@ -1,0 +1,2461 @@
+--declare @oitem_id int
+--SET @oitem_id = 5234
+--split wg alokacji
+DELETE
+FROM t_ord_allocation
+WHERE oitem_id = @oitem_id
+--1
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_a cce_code
+	,oitem._aca_code_cost_type_b aca_code
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_a
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl001 > 0
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_a)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU WHERE allo.oitem_id = @oitem_id
+
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
+-----------2
+
+
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_a cce_code
+	,oitem._aca_code_cost_type_b aca_code
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_a
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl002 > 0
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_a)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
+-----3
+
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_a cce_code --CK
+	,oitem._aca_code_cost_type_b  aca_code--Cost Type
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_a
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl003 > 0
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_a)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU WHERE allo.oitem_id = @oitem_id
+
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
+-----4
+
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_a cce_code --CK
+	,oitem._aca_code_cost_type_b  aca_code--Cost Type
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_a
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl004 > 0
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_a)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU WHERE allo.oitem_id = @oitem_id
+
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
+----5
+
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_b cce_code --CK
+	,oitem._aca_code_cost_type_c  aca_code--Cost Type
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_b
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl001 > 0
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_b)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU WHERE allo.oitem_id = @oitem_id
+
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
+------6
+
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_b cce_code --CK
+	,oitem._aca_code_cost_type_c  aca_code--Cost Type
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_b
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl002 > 0
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_b)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU WHERE allo.oitem_id = @oitem_id
+
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
+		
+		------7
+		
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_b cce_code --CK
+	,oitem._aca_code_cost_type_c  aca_code--Cost Type
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_b
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl003 > 0
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_b)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+--
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU WHERE allo.oitem_id = @oitem_id
+
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
+		
+		----------8
+		
+INSERT INTO t_ord_allocation 
+(
+  oitem_id
+  ,orga_level
+	,orga_node
+	,cce_code --CK
+	,aca_code --Cost Type
+	,acc_code --Ledger Account
+	,unit_code_currency
+	,lcomp_id
+	,fiscalyear_id
+	,all_id_basket
+	,all_in_percentage
+	,_atrea_code
+	,bud_id
+	,_amove_code
+	
+)
+
+SELECT 
+@oitem_id
+	,x.orga_level orga_level
+	,x.orga_node orga_node
+	,oitem._cce_code_cost_center_b cce_code --CK
+	,oitem._aca_code_cost_type_c  aca_code--Cost Type
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._acc_code
+		ELSE NULL
+		END AS acc_code --Ledger Account
+	,oitem.unit_code_currency unit_code_currency
+	,CASE 
+		WHEN la.ile = 1
+			THEN la._lcomp_id
+		ELSE NULL
+		END AS lcomp_id
+	,fy.fiscalyear_id fiscalyear_id
+	,bsk.basket_id all_id_basket
+	,1 all_in_percentage
+	,'y' _atrea_code
+	,budget.bud_id bud_id
+	,'f002'
+FROM t_ord_item AS oitem
+JOIN t_ord_basket bsk ON oitem.basket_id = bsk.basket_id
+JOIN t_ord_cost_center AS cce ON cce.cce_code = oitem._cce_code_cost_center_b
+LEFT JOIN x_orga_all header ON header.orga_id = bsk.orga_id
+INNER JOIN x_orga_all x ON x.orga_level = 'site'
+	AND x.lve_code = header.lve_code
+	AND x.status_code != 'del'
+--FISCAL YEAR
+LEFT JOIN t_ord_fiscal_year fy ON x.lcomp_id = fy.lcomp_id
+	AND fy.fiscalyear_code = YEAR(@timestamp)
+--Ledger Account (Konto) na podstawie Cost Type oraz Spółki.
+--Wybieramy jedno konto, i sprawdzamy ile ich jest
+OUTER APPLY (
+	SELECT MAX(la._acc_code) _acc_code
+		,la._lcomp_id _lcomp_id
+		,COUNT(1) ile
+	FROM t_ord_account_account_category_ la
+	WHERE bsk._aca_code = la._aca_code
+		AND la._lcomp_id = x.lcomp_id
+		AND la.status_code = 'val'
+	GROUP BY la._aca_code
+		,la._lcomp_id
+	) la
+--BUDGET
+OUTER APPLY (
+	SELECT bud.bud_id bud_id
+	FROM t_ord_budget AS bud
+	JOIN t_ord_budget_amount AS budam ON bud.bud_id = budam.bud_id
+	WHERE budam.fiscalyear_id = fy.fiscalyear_id
+		AND bud.cce_code = bsk.cce_code
+		AND bud.aca_code = bsk._aca_code
+	) budget
+WHERE oitem.oitem_id = @oitem_id
+AND cce._cce_pl004 > 0
+	
+	--ZABEZPIECZENIE PRZED DUPLIKATAMI
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation allo
+		WHERE allo.oitem_id = oitem.oitem_id
+			AND allo.orga_level = x.orga_level
+			AND allo.orga_node = x.orga_node
+		AND allo.cce_code = oitem._cce_code_cost_center_b)
+
+--USTAWIENIE PROCENTÓW
+
+UPDATE allo
+SET allo.all_percentage = 
+			CASE WHEN bsk._ssele_code_split_selection = 'q'
+			THEN
+				CASE 
+						WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_b/oitem.oitem_quantity)*100, 2)
+				END 
+			WHEN 	bsk._ssele_code_split_selection = 'v'
+			THEN 
+				CASE 
+					WHEN allo_com.lcomp_id = 1
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_b, 2)
+				END
+			END
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_b = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+				
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+			)
+) TUNZ 
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+			)
+	) UF 
+OUTER APPLY (
+SELECT cce_tunz._cce_pl003 PTE
+FROM t_ord_cost_center AS cce_tunz
+WHERE cce_tunz.cce_code = allo.cce_code
+	AND EXISTS (
+		SELECT 1
+		FROM t_ord_allocation AS alloc
+		JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+			AND alloc.orga_node = alloc_com.orga_node
+		WHERE alloc.oitem_id = @oitem_id
+			AND alloc.cce_code = cce_tunz.cce_code
+			AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU 
+WHERE allo.oitem_id = @oitem_id
+--USTAWIENIE PROCENTÓW DLA CK1
+UPDATE allo
+SET allo.all_percentage = 
+
+CASE WHEN bsk._ssele_code_split_selection = 'q'
+THEN
+CASE 
+				WHEN allo_com.lcomp_id = 1
+						THEN 
+						CASE WHEN oitem._cce_code_cost_center_b IS NULL
+						THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * 100, 2)
+						ELSE
+						END
+						ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 2
+						THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 3
+						THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+					WHEN allo_com.lcomp_id = 4
+						THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) *  (oitem._oitem_split_quantity_a/oitem.oitem_quantity)*100, 2)
+END 
+WHEN 	bsk._ssele_code_split_selection = 'v'
+THEN 
+CASE 
+	WHEN allo_com.lcomp_id = 1
+		THEN
+		CASE WHEN oitem._cce_code_cost_center_b IS NULL
+		THEN ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem.oitem_quantity, 2)
+		ELSE
+		END
+		ROUND(CAST(cce._cce_pl001 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 2
+		THEN ROUND(CAST(cce._cce_pl002 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 3
+		THEN ROUND(CAST(cce._cce_pl003 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+	WHEN allo_com.lcomp_id = 4
+		THEN ROUND(CAST(cce._cce_pl004 AS DECIMAL(15, 2)) / (CAST(ISNULL(TUNZ.TUNZ, 0) + ISNULL(UF.UF, 0) + ISNULL(PTE.PTE, 0) + ISNULL(TU.TU, 0) AS DECIMAL(15, 2))) * oitem._oitem_split_a, 2)
+END
+
+
+END
+	
+FROM t_ord_allocation AS allo 
+JOIN t_ord_item AS oitem ON allo.oitem_id = oitem.oitem_id 
+JOIN t_ord_cost_center AS cce ON oitem._cce_code_cost_center_a = cce.cce_code AND allo.cce_code = cce.cce_code 
+JOIN t_ord_basket AS bsk ON bsk.basket_id = oitem.basket_id
+JOIN x_orga_all allo_com ON allo.orga_level = allo_com.orga_level AND allo.orga_node = allo_com.orga_node
+
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl001 TUNZ
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 1
+		)
+) TUNZ 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl002 UF
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 2
+		)
+) UF 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl003 PTE
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 3
+		)
+) PTE 
+OUTER APPLY (
+	SELECT cce_tunz._cce_pl004 TU
+	FROM t_ord_cost_center AS cce_tunz
+	WHERE cce_tunz.cce_code = allo.cce_code
+		AND EXISTS (
+			SELECT 1
+			FROM t_ord_allocation AS alloc
+			JOIN x_orga_all alloc_com ON alloc.orga_level = alloc_com.orga_level
+				AND alloc.orga_node = alloc_com.orga_node
+			WHERE alloc.oitem_id = @oitem_id
+				AND alloc.cce_code = cce_tunz.cce_code
+				AND alloc_com.lcomp_id = 4
+		)
+) TU WHERE allo.oitem_id = @oitem_id
+
+
+--DODANIE TAX
+INSERT INTO t_ord_allocation_tax (
+	all_id
+	,tva_code
+	,tvadeduc_code
+	,tvasmod_code
+	,tvasmod_self_assessed
+	)
+SELECT a.all_id
+	,tax.tva_code
+	,'N' tvadeduc_code
+	,NULL tvasmod_code
+	,0 tvasmod_self_assessed
+FROM t_ord_allocation AS a
+JOIN t_ord_item_tax AS tax ON tax.oitem_id = a.oitem_id
+WHERE a.oitem_id = @oitem_id
+	AND NOT EXISTS (
+		SELECT 1
+		FROM t_ord_allocation_tax AS atc
+		WHERE atc.all_id = a.all_id
+			AND atc.tva_code = tax.tva_code
+		)
